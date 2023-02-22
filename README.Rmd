@@ -1,0 +1,499 @@
+---
+title: 'UK Biobank Metabolite-Disease Association Atlas: Interactive Visualizations'
+author: "Tommi Suvitaival, Steno Diabetes Center Copenhagen, tommi.raimo.leo.suvitaival@regionh.dk"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    keep_md: true
+    fig_width: 9
+    fig_height: 9
+    dev: jpeg
+    toc: yes
+  github_document:
+    fig_width: 9
+    fig_height: 9
+    dev: jpeg
+    toc: yes
+always_allow_html: true
+---
+
+# Introduction
+
+* This is a tutorial to creating interactive visualizations of associations between metabolites and diseases.
+
+* The data used in this tutorial have been published in the following publication:
+
+Julkunen, H., Cichońska, A., Tiainen, M. *et al*. **Atlas of plasma NMR biomarkers for health and disease in 118,461 individuals from the UK Biobank**. *Nat Commun* 14, 604 (2023). https://doi.org/10.1038/s41467-023-36231-7
+
+* The data have been downloaded from https://biomarker-atlas.nightingale.cloud/ under the tab *Summary statistics* (accessed 2023-02-20).
+
+* View this document at https://tommi-s.com/Metabolite-Disease-Atlas/ to show all output correctly.
+
+# Preparations
+
+## Load Data
+
+```{r}
+
+data <- 
+  readr::read_csv(
+    file = "C:/Users/tsuv0001/Documents/data-nonsensitive-local-copies/ukb_nightingale_biomarker_disease_association_atlas.csv" # Path to the data file downloaded from https://biomarker-atlas.nightingale.cloud/ .
+  )
+
+```
+
+## List Measured Biomarkers
+
+```{r}
+
+names.biomarkers <- sort( names( table( data$"biomarker_name" ) ) )
+
+names.biomarkers
+
+```
+
+## Omit Lipoprotein Particle Descriptors
+
+```{r}
+
+names.biomarkers.printed <- names.biomarkers
+
+names.biomarkers.printed <-
+  names.biomarkers.printed[ 
+    !grepl(
+      x = names.biomarkers.printed,
+      pattern = "DL"
+    )
+  ]
+
+names.biomarkers.printed
+
+```
+
+## Select Population and Endpoint
+
+```{r}
+
+table( data$"age_group" )
+
+table( data$"endpoint_type" )
+
+```
+
+```{r}
+
+data.plot <- data
+
+data.plot <- data.plot[ data.plot$"age_group" == "Full population", ]
+
+data.plot <- data.plot[ data.plot$"endpoint_type" == "incident", ]
+
+data.plot <- 
+  data.plot[ data.plot$"biomarker_name" %in% names.biomarkers.printed, ]
+
+```
+
+# Principal Component Analysis (PCA)
+
+## Preparations
+
+### Create a Wide Data Matrix
+
+* Biomarkers as columns
+* Conditions as rows
+* Additional columns on condition name and disease group for use in the plot
+
+```{r}
+
+data.plot.pca <-
+  tidyr::pivot_wider(
+    data = data.plot,
+    id_cols = icd10_desc,
+    names_from = biomarker_name,
+    # values_from = estimate.significant
+    values_from = estimate
+  )
+
+tmp <- data.plot.pca$"icd10_desc"
+
+# Extract disease group from disease code (condition).
+# Extract most increased and most decreased metabolites for each condition.
+
+data.plot.pca <- 
+  data.frame( 
+    Condition_Name = unlist( data.plot.pca[ , 1 ] ),
+    Disease_Group =
+      stringr::str_sub(
+        string = unlist( data.plot.pca[ , 1 ] ),
+        start = 1,
+        end = 1
+      ),
+    Top_Increase =
+      colnames( data.plot.pca )[
+        apply(
+          X = data.plot.pca[ , -1 ],
+          MAR = 1,
+          FUN = which.max
+        ) + 1
+      ],
+    Top_Decrease =
+      colnames( data.plot.pca )[
+        apply(
+          X = data.plot.pca[ , -1 ],
+          MAR = 1,
+          FUN = which.min
+        ) + 1
+      ],
+    Condition = NA,
+    data.plot.pca[ , -1 ]
+    )
+
+# Create a text for tooltip.
+
+data.plot.pca$"Condition" <-
+  paste0(
+    data.plot.pca$"Condition_Name",
+    "\n\nMost Increased: ",
+    data.plot.pca$"Top_Increase",
+    "\nMost Decreased: ",
+    data.plot.pca$"Top_Decrease"
+  )
+
+# Set disease codes as rownames.
+
+rownames( data.plot.pca ) <- tmp
+
+```
+
+### Omit Rows with No Values
+
+* Disease codes that have missing data on any of the biomarkers.
+
+```{r}
+
+has.any.missing <-
+  apply(
+    X = is.na( data.plot.pca[ , -( 1:5 ) ] ),
+    MAR = 1,
+    FUN = any
+  )
+
+table( has.any.missing )
+
+data.plot.pca <- data.plot.pca[ !has.any.missing, ]
+
+```
+
+### Compute PCA
+
+* Omitting the metadata columns.
+
+```{r}
+
+result.pca <- prcomp( data.plot.pca[ , -( 1:5 ) ] )
+
+```
+
+### Show Non-Interactive PCA
+
+* Conditions as points (scores)
+* Metabolites as loadings
+* Color by disease group
+* Further information about the condition in tooltip (via shape; later on used by *plotly::ggplotly*)
+
+```{r}
+
+library( "ggfortify" )
+
+plot.pca <- 
+  autoplot(
+    result.pca,
+    data = data.plot.pca,
+    alpha = 0.5,
+    loadings.colour = "black",
+    loadings.label = TRUE,
+    loadings.label.colour = "black",
+    shape = "Condition",
+    colour = "Disease_Group"
+  ) +
+  ggplot2::theme( legend.position = "none" )
+
+```
+
+```{r PCA-Non-Interactive}
+
+print( plot.pca )
+
+```
+
+### Create the Interactive PCA Figure
+
+```{r}
+
+plot.pca.interactive <-
+  plotly::ggplotly( 
+    p = plot.pca,
+    tooltip = "shape"
+  )
+
+```
+
+## Show the Interactive PCA Figure
+
+```{r PCA-Interactive}
+
+plot.pca.interactive
+
+```
+
+# Heatmap
+
+## Preparations
+
+### Show Non-Significant Values as Zero
+
+```{r}
+
+data.plot$"Association" <- data.plot$"estimate"
+
+data.plot[ data.plot$"pvalue" > 0.01, "Association" ] <- 0
+
+```
+
+### Create a Wide Data Matrix
+
+```{r}
+
+data.plot.wide <-
+  tidyr::pivot_wider(
+    data = data.plot,
+    id_cols = icd10_desc,
+    names_from = biomarker_name,
+    values_from = Association
+  )
+
+tmp <- data.plot.wide$"icd10_desc"
+
+data.plot.wide <- as.matrix( data.plot.wide[ , -1 ] )
+
+rownames( data.plot.wide ) <- tmp
+
+```
+
+### Fill in Missing Disease-Metabolite Values as Zero
+
+```{r}
+
+data.plot.wide[ is.na( data.plot.wide ) ] <- 0
+
+```
+
+
+### Omit Conditions with No Associations
+
+```{r}
+
+is.all.zeros <- 
+  apply(
+    X = data.plot.wide == 0,
+    MAR = 1,
+    FUN = all
+  )
+
+table( is.all.zeros )
+
+conditions.all.zeros <- rownames( data.plot.wide )[ is.all.zeros ]
+
+data.plot.wide <- data.plot.wide[ !is.all.zeros, ]
+
+```
+
+### Create Non-Interactive Heatmap
+
+```{r Heatmap-Non-Interactive, fig.width = 48, fig.height = 72 }
+
+result.heatmap <-
+  gplots::heatmap.2(
+    x = data.plot.wide,
+    trace = "none",
+    tracecol = "black",
+    col = gplots::bluered( n = 99 ),
+    margins = c( 15, 15 ),
+    srtCol = 45,
+    cexCol = 2
+  )
+
+```
+
+### Define the Row and Column Order in Long Data
+
+* Use the order from hierarchical clustering of the non-interactive heatmap.
+* The should be possible to specify in the call to *plotly::layout*, but for some reason it does not work for the row order.
+* Instead, add a running three-digit number as suffix in the condition name to enforce the desired row order based on alphabetical order.
+
+```{r}
+
+data.plot.heatmap <- data.plot
+
+data.plot.heatmap <- 
+  data.plot.heatmap[ 
+    !( data.plot.heatmap$"icd10_desc" %in% conditions.all.zeros ),
+  ]
+
+data.plot.heatmap$"biomarker_name" <-
+  factor(
+    x = data.plot.heatmap$"biomarker_name",
+    levels = colnames( data.plot.wide )[ result.heatmap$"colInd" ]
+  )
+
+data.plot.heatmap$"icd10_desc" <-
+  factor(
+    x = data.plot.heatmap$"icd10_desc",
+    levels = rownames( data.plot.wide )[ result.heatmap$"rowInd" ],
+    labels = 
+      paste( 
+        formatC(
+          x = 1:nrow( data.plot.wide ),
+          flag = "0",
+          width = 3
+        ),
+        rownames( data.plot.wide )[ result.heatmap$"rowInd" ]
+      )
+  )
+
+```
+
+### Define Tooltip
+
+* Show the p-value of the association between the condition and metabolite.
+
+```{r}
+
+data.plot.heatmap$"annotation" <-
+  paste0(
+    "p: ",
+    data.plot.heatmap$"pvalue"
+  )
+
+```
+
+### Set Colorscale Midpoint to White and Zero
+
+```{r}
+
+val.min <- round( min( data.plot.heatmap$"Association" ) * 100 )
+
+val.max <- round( max( data.plot.heatmap$"Association" ) * 100 )
+
+range <- max( abs( val.max ), abs( val.min ) ) * 2
+
+palette <- gplots::bluered( n = range )
+
+palette <- palette[ round( range / 2 + val.min ) : round( range / 2 + val.max ) ]
+
+```
+
+### Show Non-Significant Values as Missing Data
+
+```{r}
+
+data.plot.heatmap$"Association"[ data.plot.heatmap$"pvalue" > 0.01 ] <- NA
+
+```
+
+### Cut Condition Names Shorter
+
+```{r}
+
+data.plot.heatmap$"icd10_desc" <-
+  stringr::str_sub(
+    string = data.plot.heatmap$"icd10_desc",
+    start = 1,
+    end = 30
+  )
+
+```
+
+### Create the Interactive Heatmap
+
+```{r}
+
+# Create the heatmap.
+
+plot.heatmap.interactive <-
+  plotly::plot_ly(
+    data = data.plot.heatmap,
+    x = ~biomarker_name,
+    y = ~icd10_desc,
+    z = ~Association,
+    text = ~annotation,
+    colors = gplots::bluered( n = 99 ),
+    type = "heatmap"
+  )
+
+# Define the colorscale as symmetric.
+
+plot.heatmap.interactive <-
+plotly::colorbar(
+  p = plot.heatmap.interactive,
+    limits = 
+      c( -1, 1 ) * max( x = abs( data.plot.heatmap$"Association" ), na.rm = TRUE )
+  )
+
+# Omit axis titles, adjust text size and omit background grid.
+
+plot.heatmap.interactive <-
+  plotly::layout(
+    p = plot.heatmap.interactive,
+    xaxis = 
+      list(
+        # categoryorder = "array",
+        # categoryarray = colnames( data.plot.wide )[ result.heatmap$"colInd"],
+        showgrid = FALSE,
+        tickfont = list( size = 7 ),
+        title = ""
+      ),
+    yaxis = 
+      list(
+        # categoryorder = "array",
+        # categoryarray = rownames( data.plot.wide )[ result.heatmap$"rowInd" ],
+        showgrid = FALSE,
+        tickfont = list( size = 7 ),
+        title = ""
+      )
+  )
+
+```
+
+## Show the Interactive Heatmap
+
+```{r Heatmap-Interactive}
+
+plot.heatmap.interactive
+
+```
+
+# SessionInfo
+
+```{r}
+
+utils::sessionInfo()
+
+```
+
+
+# Appendix
+
+* Copy README.html to index.html to show this document on Github Pages.
+
+```{r index-html}
+
+if ( file.exists( "README.html" ) ) {
+  
+  file.copy( 
+    from = "README.html",
+    to = "index.html",
+    overwrite = TRUE
+  )
+  
+}
